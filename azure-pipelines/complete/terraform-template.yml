@@ -1,0 +1,95 @@
+parameters:
+  - name: environmentName
+    type: string
+  - name: backendRG
+    type: string
+  - name: backendSA
+    type: string
+  - name: backendKey
+    type: string
+  - name: azureServiceConnection
+    type: string
+  - name: approvalEmail
+    type: string
+
+jobs:
+  - job: TerraformInit
+    displayName: 'Initialize: ${{ parameters.environmentName }}'
+    steps:
+      - task: TerraformInstaller@0
+        inputs:
+          terraformVersion: '1.5.5'
+
+      - task: TerraformTaskV4@4
+        inputs:
+          provider: 'azurerm'
+          backendServiceArm: ${{ parameters.azureServiceConnection }}
+          backendAzureRmResourceGroupName: ${{ parameters.backendRG }}
+          backendAzureRmStorageAccountName: ${{ parameters.backendSA }}
+          backendAzureRmContainerName: 'tfstate'
+          backendAzureRmKey: ${{ parameters.backendKey }}
+          command: 'init'
+          workingDirectory: 'terraform'
+
+      - task: TerraformTaskV4@4
+        inputs:
+          provider: 'azurerm'
+          command: 'validate'
+          workingDirectory: 'terraform'
+
+      - task: PublishPipelineArtifact@1
+        inputs:
+          targetPath: 'terraform'
+          artifactName: 'terraform-state-${{ parameters.environmentName }}'
+
+  - job: TerraformPlan
+    displayName: 'Plan: ${{ parameters.environmentName }}'
+    dependsOn: TerraformInit
+    steps:
+      - task: DownloadPipelineArtifact@2
+        inputs:
+          artifactName: 'terraform-state-${{ parameters.environmentName }}'
+          downloadPath: 'terraform'
+
+      - task: TerraformTaskV4@4
+        inputs:
+          provider: 'azurerm'
+          command: 'plan'
+          environmentServiceNameAzureRM: ${{ parameters.azureServiceConnection }}
+          workingDirectory: 'terraform'
+
+  - job: waitForValidation
+    displayName: Wait for external validation
+    pool: server
+    timeoutInMinutes: 4320 # 3 days timeout
+    dependsOn: TerraformPlan
+    steps:
+      - task: ManualValidation@0
+        timeoutInMinutes: 1440 # 1 day timeout
+        inputs:
+          notifyUsers: ${{ parameters.approvalEmail }}
+          instructions: 'Please validate the build configuration and resume'
+          onTimeout: 'resume'
+
+  - deployment: TerraformApply
+    displayName: 'Apply: ${{ parameters.environmentName }}'
+    environment: ${{ parameters.environmentName }}
+    dependsOn: waitForValidation
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+            - task: DownloadPipelineArtifact@2
+              inputs:
+                artifactName: 'terraform-state-${{ parameters.environmentName }}'
+                downloadPath: 'terraform'
+
+            - task: TerraformTaskV4@4
+              inputs:
+                provider: 'azurerm'
+                command: 'apply'
+                backendServiceArm: ${{ parameters.azureServiceConnection }}
+                commandOptions: '--auto-approve'
+                environmentServiceNameAzureRM: ${{ parameters.azureServiceConnection }}
+                workingDirectory: 'terraform'
+

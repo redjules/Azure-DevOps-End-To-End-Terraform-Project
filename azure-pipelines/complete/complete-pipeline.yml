@@ -1,0 +1,54 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  name: "Default"
+
+variables:
+  backendKey: "terraform.tfstate"
+  azureServiceConnection: "azurerm"
+  approvalEmail: "anapedrabcnt@gmail.com"
+
+stages:
+  # Dev Stage
+  - stage: Dev
+    displayName: "Dev Environment"
+    jobs:
+      - template: terraform-template.yml
+        parameters:
+          environmentName: "dev"
+          backendRG: "dev-dove-rg"
+          backendSA: "devdovetfstate"
+          backendKey: $(backendKey)
+          azureServiceConnection: $(azureServiceConnection)
+          approvalEmail: $(approvalEmail)
+
+  # Test Stage
+  - stage: Test
+    displayName: "Test Environment"
+    dependsOn: Dev
+    jobs:
+      - template: terraform-template.yml
+        parameters:
+          environmentName: "test"
+          backendRG: "test-goose-rg"
+          backendSA: "testgoosetfstate"
+          backendKey: $(backendKey)
+          azureServiceConnection: $(azureServiceConnection)
+          approvalEmail: $(approvalEmail)
+
+  # Prod Stage
+  - stage: Prod
+    displayName: "Prod Environment"
+    dependsOn: Test
+    jobs:
+      - template: terraform-template.yml
+        parameters:
+          environmentName: "prod"
+          backendRG: "prod-wildcat-rg"
+          backendSA: "prodwildcattfstate"
+          backendKey: $(backendKey)
+          azureServiceConnection: $(azureServiceConnection)
+          approvalEmail: $(approvalEmail)

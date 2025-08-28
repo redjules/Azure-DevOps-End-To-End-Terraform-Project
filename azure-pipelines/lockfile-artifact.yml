@@ -1,0 +1,90 @@
+trigger:
+  branches:
+    include:
+      - main  # Trigger pipeline on commits to the main branch
+
+pool:
+  name: 'Default'
+
+variables:
+  terraformVersion: '1.5.5'  # Specify the Terraform version
+  azureServiceConnection: 'azurerm'  # Azure service connection name
+  backendResourceGroup: 'skink-rg' # Remote backend Resource Group
+  backendStorageAccount: 'skinktfstate'  # Remote backend storage account
+  backendContainer: 'tfstate'  # Remote backend storage container
+  backendKey: 'terraform.tfstate'  # State file name in remote backend
+
+stages:
+  # Stage 1: Initialization (init, validate, lint)
+  - stage: Initialization
+    jobs:
+      - job: TerraformInit
+        steps:
+          - task: TerraformInstaller@0  # Install Terraform
+            inputs:
+              terraformVersion: $(terraformVersion)
+
+          # Initialize Terraform
+          - task: TerraformTaskV4@4
+            inputs:
+              provider: 'azurerm'
+              backendServiceArm: $(azureServiceConnection)
+              backendAzureRmResourceGroupName: $(backendResourceGroup)
+              backendAzureRmStorageAccountName: $(backendStorageAccount)
+              backendAzureRmContainerName: $(backendContainer)
+              backendAzureRmKey: $(backendKey)
+              command: 'init'  # Initialize Terraform
+              workingDirectory: 'terraform'  # Set the working directory
+
+          # Validate Terraform configuration
+          - task: TerraformTaskV4@4
+            inputs:
+              provider: 'azurerm'
+              command: 'validate'  # Validate Terraform configuration
+              workingDirectory: 'terraform'
+
+          # Publish the Terraform state as an artifact
+          - task: PublishPipelineArtifact@1
+            inputs:
+              targetPath: 'terraform'
+              artifactName: 'terraform-state'
+
+  # Stage 2: Plan
+  - stage: Plan
+    dependsOn: Initialization  # The Plan stage depends on the Initialization stage
+    jobs:
+      - job: TerraformPlan
+        steps:
+          # Download the Terraform state artifact
+          - task: DownloadPipelineArtifact@2
+            inputs:
+              artifactName: 'terraform-state'
+              downloadPath: 'terraform'
+
+          - task: TerraformTaskV4@4
+            inputs:
+              provider: 'azurerm'
+              command: 'plan'  # Run terraform plan
+              environmentServiceNameAzureRM: $(azureServiceConnection)  # Azure service connection for authentication
+              workingDirectory: 'terraform'  # Set the working directory
+
+  # Stage 3: Apply (with manual approval)
+  - stage: Apply
+    dependsOn: Plan  # The Apply stage depends on the Plan stage
+    jobs:
+      - job: TerraformApply
+        steps:
+          # Download the Terraform state artifact
+          - task: DownloadPipelineArtifact@2
+            inputs:
+              artifactName: 'terraform-state'
+              downloadPath: 'terraform'
+              
+          - task: TerraformTaskV4@4
+            inputs:
+              provider: 'azurerm'
+              command: 'apply'  # Run terraform apply
+              backendServiceArm: $(azureServiceConnection)
+              commandOptions: '--auto-approve'
+              environmentServiceNameAzureRM: $(azureServiceConnection)  # Azure service connection for authentication
+              workingDirectory: 'terraform'  # Set the working directory
